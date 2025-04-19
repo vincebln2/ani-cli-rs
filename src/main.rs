@@ -1,5 +1,5 @@
 use ani_cli_rs::{
-    models::{EpisodeMeta, EpisodeStream, TranslationType, AppError, Result},
+    models::{EpisodeMeta, EpisodeStream, AppError, Result},
     scraper::{
         client::ApiClient,
         parser::{parse_episode_list, parse_search_results, parse_stream_sources},
