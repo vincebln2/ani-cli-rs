@@ -1,10 +1,41 @@
 /*  Core data structures for scraper, cli, and player
     - Act as shared interface between fetcher,
     input parser, rendering output, and playing content
-
 */
 use std::fmt;
+use reqwest;
 
+#[derive(Debug)]
+pub enum AppError {
+    RequestError(reqwest::Error),
+    JsonError(serde_json::Error),
+    JsonRequestError(reqwest::Error),
+    ClientError(String),
+    ApiError(String),
+    ParsingError(String),
+    NoStreamsAvailable,
+    NoEpisodesAvailable,
+    UnknownError(String),
+}
+impl fmt::Display for AppError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            AppError::RequestError(e) => write!(f, "Request error: {}", e),
+            AppError::JsonError(e) => write!(f, "JSON parsing error: {}", e),
+            AppError::JsonRequestError(e) => write!(f, "JSON request error: {}", e),
+            AppError::ClientError(e) => write!(f, "Client error: {}", e),
+            AppError::ApiError(e) => write!(f, "API error: {}", e),
+            AppError::ParsingError(e) => write!(f, "Parsing error: {}", e),
+            AppError::NoStreamsAvailable => write!(f, "No streams available"),
+            AppError::NoEpisodesAvailable => write!(f, "No episodes available"),
+            AppError::UnknownError(e) => write!(f, "Unknown error: {}", e),
+        }
+    }
+}
+
+impl std::error::Error for AppError {}
+
+pub type Result<T> = std::result::Result<T, AppError>;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TranslationType {
     Sub,

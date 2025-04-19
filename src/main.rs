@@ -1,7 +1,7 @@
 use ani_cli_rs::{
-    models::{EpisodeMeta, EpisodeStream},
+    models::{EpisodeMeta, EpisodeStream, TranslationType, AppError, Result},
     scraper::{
-        fetcher::{build_http_client, fetch_episode_sources, get_episode_list, search_anime},
+        client::ApiClient,
         parser::{parse_episode_list, parse_search_results, parse_stream_sources},
     },
 };
@@ -9,23 +9,24 @@ use inquire::{Select, Text};
 use std::process::{Child, Command};
 
 /*
-    Prompts user, calls approproiate functions from fetcher and parser to query
-    anime api, then display parsed results from json received
+    Prompts user, calls appropriate functions from the API client and parser to query
+    anime API, then display parsed results from JSON received
 */
 #[tokio::main]
-async fn main() {
-    let client = build_http_client();
+async fn main() -> Result<()> {
+    // Initialize API client
+    let client = ApiClient::new()?;
 
     // Search
     let query = Text::new("Search anime:")
         .prompt()
-        .expect("Search input failed");
+        .map_err(|_| AppError::UnknownError("Search input failed".to_string()))?;
 
-    let raw_results = search_anime(&client, &query).await.expect("Search failed");
+    let raw_results = client.search_anime(&query).await?;
     let results = parse_search_results(&raw_results);
     if results.is_empty() {
         println!("No results found.");
-        return;
+        return Err(AppError::NoEpisodesAvailable);
     }
 
     // Anime selection
@@ -49,12 +50,12 @@ async fn main() {
 
     let selected_anime_label = Select::new("Select anime:", anime_labels)
         .prompt()
-        .expect("Anime selection failed");
+        .map_err(|_| AppError::UnknownError("Anime selection failed".to_string()))?;
 
     let (_, anime_index) = anime_choices
         .iter()
         .find(|(label, _)| label == &selected_anime_label)
-        .expect("Could not find selected anime");
+        .ok_or_else(|| AppError::UnknownError("Could not find selected anime".to_string()))?;
 
     let anime = &results[*anime_index];
     println!("\nSelected: {}\n", anime.title);
@@ -62,21 +63,20 @@ async fn main() {
     // Translation type
     let translation = Select::new("Select translation:", anime.available_translations.clone())
         .prompt()
-        .expect("Translation selection failed");
+        .map_err(|_| AppError::UnknownError("Translation selection failed".to_string()))?;
 
     // Episode input
-    let episode_list = get_episode_list(&client, &anime.id)
-        .await
-        .expect("Failed to fetch episode list");
+    let episode_list = client.get_episode_list(&anime.id).await?;
 
     let episodes = parse_episode_list(&episode_list, translation);
     if episodes.is_empty() {
         println!("No episodes available.");
-        return;
+        return Err(AppError::NoEpisodesAvailable);
     }
 
     // Show interactive episode menu
-    let episode_number = prompt_for_episode_number(&episodes).expect("Failed to select episode");
+    let episode_number = prompt_for_episode_number(&episodes)
+        .ok_or_else(|| AppError::UnknownError("Failed to select episode".to_string()))?;
 
     // Fetch streams
     println!(
@@ -84,14 +84,12 @@ async fn main() {
         episode_number, translation
     );
 
-    let stream_data = fetch_episode_sources(&client, &anime.id, &episode_number, translation)
-        .await
-        .expect("Failed to fetch stream sources");
+    let stream_data = client.fetch_episode_sources(&anime.id, &episode_number, translation).await?;
 
     let streams = parse_stream_sources(&stream_data);
     if streams.is_empty() {
         println!("No streams found.");
-        return;
+        return Err(AppError::NoStreamsAvailable);
     }
 
     // Stream provider selection
@@ -107,17 +105,18 @@ async fn main() {
 
     let selected_stream_label = Select::new("Choose stream provider:", stream_labels)
         .prompt()
-        .expect("Stream selection failed");
+        .map_err(|_| AppError::UnknownError("Stream selection failed".to_string()))?;
 
     let (_, stream_index) = stream_choices
         .iter()
         .find(|(label, _)| label == &selected_stream_label)
-        .expect("Could not find selected stream");
+        .ok_or_else(|| AppError::UnknownError("Could not find selected stream".to_string()))?;
 
     let selected_stream = &streams[*stream_index];
 
     // Play stream as child process
-    let mut child: Child = play_stream(selected_stream, "mpv").expect("Failed to spawn player");
+    let mut child: Child = play_stream(selected_stream, "mpv")
+        .map_err(|e| AppError::UnknownError(format!("Failed to spawn player: {}", e)))?;
 
     // Prompt while playing
     if let Some(choice) = prompt_playback_menu() {
@@ -128,6 +127,8 @@ async fn main() {
             println!("Selected: {} (not yet implemented)", choice);
         }
     }
+
+    Ok(())
 }
 
 fn prompt_for_episode_number(episodes: &[EpisodeMeta]) -> Option<String> {
@@ -184,12 +185,11 @@ fn prompt_playback_menu() -> Option<String> {
         .map(|s| s.to_string())
 }
 
-pub fn play_stream(stream: &EpisodeStream, player: &str) -> std::io::Result<Child> {
+fn play_stream(stream: &EpisodeStream, player: &str) -> std::io::Result<Child> {
     println!("Launching {} with player {}", stream.url, player);
 
     Command::new(player)
         .args([
-            // not sure if this works! performance varies by source website for mpv
             "--cache=yes",
             "--cache-pause",
             "--cache-pause-wait=5",
